@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import "forge-std/Test.sol";
-import "./PGPRegistry.sol";
+import {Test} from "forge-std/Test.sol";
+import {PGPRegistry} from "./PGPRegistry.sol";
 
 contract PGPRegistryTest is Test {
     PGPRegistry registry;
 
     address alice = address(0xA11CE);
-    address bob   = address(0xB0B);
+    address bob = address(0xB0B);
 
     string constant FP1 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     string constant FP2 = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
@@ -112,7 +112,9 @@ contract PGPRegistryTest is Test {
 
     function test_attest_revert_signature_too_large() public {
         bytes memory bigSig = new bytes(16385);
-        for (uint256 i = 0; i < bigSig.length; i++) bigSig[i] = "X";
+        for (uint256 i = 0; i < bigSig.length; i++) {
+            bigSig[i] = "X";
+        }
 
         vm.prank(alice);
         vm.expectRevert(PGPRegistry.SignatureTooLarge.selector);
@@ -121,7 +123,9 @@ contract PGPRegistryTest is Test {
 
     function test_attest_revert_public_key_too_large() public {
         bytes memory bigKey = new bytes(16385);
-        for (uint256 i = 0; i < bigKey.length; i++) bigKey[i] = "X";
+        for (uint256 i = 0; i < bigKey.length; i++) {
+            bigKey[i] = "X";
+        }
 
         vm.prank(alice);
         vm.expectRevert(PGPRegistry.PublicKeyTooLarge.selector);
@@ -130,7 +134,9 @@ contract PGPRegistryTest is Test {
 
     function test_attest_accepts_max_payload() public {
         bytes memory maxSig = new bytes(16384);
-        for (uint256 i = 0; i < maxSig.length; i++) maxSig[i] = "X";
+        for (uint256 i = 0; i < maxSig.length; i++) {
+            maxSig[i] = "X";
+        }
 
         vm.prank(alice);
         registry.attest(FP1, string(maxSig), KEY);

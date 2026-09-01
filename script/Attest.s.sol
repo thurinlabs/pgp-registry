@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "forge-std/Script.sol";
-import "../PGPRegistry.sol";
+import {Script, console} from "forge-std/Script.sol";
+import {PGPRegistry} from "../PGPRegistry.sol";
 
 contract Attest is Script {
     function run() external {
         string memory fingerprint = "6E0053911942A889426C1866E34D9266098F7FE7";
+        // forge-lint: disable-next-line(unsafe-cheatcode)
         string memory pgpSignature = vm.readFile("script/pgp-sig.txt");
+        // forge-lint: disable-next-line(unsafe-cheatcode)
         string memory pgpPublicKey = vm.readFile("script/pgp-key.txt");
 
         vm.startBroadcast();
