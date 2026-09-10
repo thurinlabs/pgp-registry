@@ -10,7 +10,7 @@ pragma solidity 0.8.24;
  *   - ETH address → GPG key: one-to-many (append-only, supports key rotation)
  *
  * Verification is off-chain: anyone can submit a claim, but only claims with valid
- * PGP signatures are meaningful. Explorers (e.g. Scry) verify the PGP signature
+ * PGP signatures are meaningful. Explorers (e.g. thurin.id) verify the PGP signature
  * against the public key stored in the event log and show verified vs. unverified.
  *
  * This design prevents fingerprint squatting — a fake claim cannot block the real
