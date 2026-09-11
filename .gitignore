@@ -3,3 +3,5 @@ out/
 reports/
 .env
 .env.*
+broadcast/**/31337/
+CLAUDE-SECURITY-*/
