@@ -778,3 +778,27 @@ contract PGPRegistryGasTest is Test {
         assertEq(k, key);
     }
 }
+
+/// Prints an EIP-712 vector for identity-kit's tests: fixed inputs, fixed chain id, fixed address.
+contract PGPRegistryVectorTest is Test {
+    function test_eip712_vector() public {
+        vm.chainId(31337);
+        PGPRegistry registry = new PGPRegistry();
+        address owner = 0x70997970C51812dc3A010C7d01b50e0d17dc79C8;
+        bytes memory fp = hex"6e0053911942a889426c1866e34d9266098f7fe7";
+        bytes memory sig = "sig-bytes";
+        bytes memory key = "key-bytes";
+        uint256 nonce = 3;
+        uint256 deadline = 1_800_000_000;
+        bytes32 structHash = keccak256(abi.encode(
+            registry.ATTEST_TYPEHASH(), owner, keccak256(fp), keccak256(sig), keccak256(key), nonce, deadline
+        ));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", registry.DOMAIN_SEPARATOR(), structHash));
+        emit log_named_address("registry", address(registry));
+        emit log_named_bytes32("domainSeparator", registry.DOMAIN_SEPARATOR());
+        emit log_named_bytes32("attestStructHash", structHash);
+        emit log_named_bytes32("attestDigest", digest);
+        bytes32 revokeHash = keccak256(abi.encode(registry.REVOKE_TYPEHASH(), owner, uint256(1), nonce, deadline));
+        emit log_named_bytes32("revokeDigest", keccak256(abi.encodePacked("\x19\x01", registry.DOMAIN_SEPARATOR(), revokeHash)));
+    }
+}
