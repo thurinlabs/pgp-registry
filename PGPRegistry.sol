@@ -89,11 +89,21 @@ contract PGPRegistry {
         uint256 indexed index,
         bytes   fingerprint,
         uint8   messageVersion,
+        address keyPtr,
+        address sigPtr,
         address submitter
     );
-    event KeyUpdated(address indexed owner, bytes32 indexed fingerprintHash, uint256 indexed index, address submitter);
+    event KeyUpdated(
+        address indexed owner,
+        bytes32 indexed fingerprintHash,
+        uint256 indexed index,
+        address oldKeyPtr,
+        address newKeyPtr,
+        address submitter
+    );
     event Revoked(address indexed owner, bytes32 indexed fingerprintHash, uint256 indexed index, address submitter);
     event RecordSet(address indexed owner, uint256 indexed index, bytes32 indexed kind, address submitter);
+    event NonceUsed(address indexed owner, uint256 nonce);
 
     // ─── Storage ──────────────────────────────────────────────────────────────
 
@@ -105,7 +115,9 @@ contract PGPRegistry {
     mapping(bytes8 => mapping(bytes32 => bool)) private _seenFingerprint;
     mapping(address => mapping(uint256 => mapping(bytes32 => address))) private _records; // owner => index => kind => ptr
 
-    /// @notice Next EIP-712 nonce for each owner.
+    /// @notice Next EIP-712 nonce for each owner. Consumed only by the `…For` functions —
+    ///         direct writes do not invalidate an outstanding authorization; use
+    ///         `cancelAuthorization` for that.
     mapping(address => uint256) public nonces;
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -149,8 +161,9 @@ contract PGPRegistry {
     }
 
     /**
-     * @notice Attach a typed record to an active attestation. Empty `value` clears it.
-     *         Readers ignore kinds they don't understand.
+     * @notice Attach a typed record to an active attestation. Empty `value` clears it (allowed
+     *         on revoked entries too). Records are not copied by `reattest`, and readers should
+     *         only trust a record while its attestation is active.
      */
     function setRecord(uint256 index, bytes32 kind, bytes calldata value) external {
         _setRecord(msg.sender, index, kind, value);
@@ -221,6 +234,13 @@ contract PGPRegistry {
         _setRecord(owner, index, kind, value);
     }
 
+    /// @notice Invalidate every authorization signed with the caller's current nonce.
+    function cancelAuthorization() external {
+        uint256 used = nonces[msg.sender];
+        unchecked { nonces[msg.sender] = used + 1; }
+        emit NonceUsed(msg.sender, used);
+    }
+
     /// @notice EIP-712 domain separator. Bound to the current chain id, so an authorization
     ///         signed for Sepolia cannot be replayed on mainnet even at the same address.
     // forge-lint: disable-next-line(mixed-case-function)
@@ -276,13 +296,48 @@ contract PGPRegistry {
         return SSTORE2.read(ptr);
     }
 
+    /// @notice Paginated history: entries [start, start+count) of an owner's attestations.
+    function attestationsOfRange(address owner, uint256 start, uint256 count) external view returns (Attestation[] memory out) {
+        Attestation[] storage list = _attestations[owner];
+        uint256 n = _rangeLength(list.length, start, count);
+        out = new Attestation[](n);
+        for (uint256 i = 0; i < n; i++) out[i] = list[start + i];
+    }
+
+    function addressesForCount(bytes32 fingerprintHash) external view returns (uint256) {
+        return _addressesFor[fingerprintHash].length;
+    }
+
+    /// @notice Paginated `addressesFor`: entries [start, start+count).
+    function addressesForRange(bytes32 fingerprintHash, uint256 start, uint256 count) external view returns (address[] memory out) {
+        address[] storage list = _addressesFor[fingerprintHash];
+        uint256 n = _rangeLength(list.length, start, count);
+        out = new address[](n);
+        for (uint256 i = 0; i < n; i++) out[i] = list[start + i];
+    }
+
+    function fingerprintsForKeyIdCount(bytes8 keyId) external view returns (uint256) {
+        return _fingerprintsForKeyId[keyId].length;
+    }
+
+    /// @notice Paginated `fingerprintsForKeyId`: entries [start, start+count).
+    function fingerprintsForKeyIdRange(bytes8 keyId, uint256 start, uint256 count) external view returns (bytes[] memory out) {
+        bytes[] storage list = _fingerprintsForKeyId[keyId];
+        uint256 n = _rangeLength(list.length, start, count);
+        out = new bytes[](n);
+        for (uint256 i = 0; i < n; i++) out[i] = list[start + i];
+    }
+
     /// @notice Every owner that has ever attested this fingerprint (keccak256 of the raw bytes).
+    ///         Unbounded and growable by anyone (attesting is permissionless); readers that must
+    ///         stay responsive should use `addressesForCount` + `addressesForRange`.
     ///         Check `getAttestation` / `current` for whether a claim is still active.
     function addressesFor(bytes32 fingerprintHash) external view returns (address[] memory) {
         return _addressesFor[fingerprintHash];
     }
 
-    /// @notice Every fingerprint ever attested whose last 8 bytes are `keyId` (the long key ID).
+    /// @notice Every fingerprint ever attested with this long key ID (RFC 9580: the low-order
+    ///         8 bytes of a v4 fingerprint, the high-order 8 bytes of a v6 fingerprint).
     function fingerprintsForKeyId(bytes8 keyId) external view returns (bytes[] memory) {
         return _fingerprintsForKeyId[keyId];
     }
@@ -309,23 +364,26 @@ contract PGPRegistry {
             _seenOwner[fpHash][owner] = true;
             _addressesFor[fpHash].push(owner);
         }
-        bytes8 keyId = bytes8(fingerprint[fpLen - 8:]);
+        // Long key ID (RFC 9580 §5.5.4): v4 = low-order 64 bits, v6 = high-order 64 bits.
+        bytes8 keyId = fpLen == 20 ? bytes8(fingerprint[12:20]) : bytes8(fingerprint[0:8]);
         if (!_seenFingerprint[keyId][fpHash]) {
             _seenFingerprint[keyId][fpHash] = true;
             _fingerprintsForKeyId[keyId].push(fingerprint);
         }
 
+        address keyPtr = SSTORE2.write(pgpPublicKey);
+        address sigPtr = SSTORE2.write(pgpSignature);
         index = _attestations[owner].length;
         _attestations[owner].push(Attestation({
             fingerprint: fingerprint,
             createdAt: uint64(block.timestamp),
             revokedAt: 0,
             messageVersion: MESSAGE_VERSION,
-            keyPtr: SSTORE2.write(pgpPublicKey),
-            sigPtr: SSTORE2.write(pgpSignature)
+            keyPtr: keyPtr,
+            sigPtr: sigPtr
         }));
 
-        emit Attested(owner, fpHash, index, fingerprint, MESSAGE_VERSION, msg.sender);
+        emit Attested(owner, fpHash, index, fingerprint, MESSAGE_VERSION, keyPtr, sigPtr, msg.sender);
     }
 
     function _revoke(address owner, uint256 index) internal {
@@ -340,16 +398,19 @@ contract PGPRegistry {
         if (pgpPublicKey.length == 0) revert EmptyPublicKey();
         if (pgpPublicKey.length > MAX_KEY_BYTES) revert PublicKeyTooLarge();
         Attestation storage a = _activeAttestation(owner, index);
+        address oldKeyPtr = a.keyPtr;
         a.keyPtr = SSTORE2.write(pgpPublicKey);
-        emit KeyUpdated(owner, keccak256(a.fingerprint), index, msg.sender);
+        emit KeyUpdated(owner, keccak256(a.fingerprint), index, oldKeyPtr, a.keyPtr, msg.sender);
     }
 
     function _setRecord(address owner, uint256 index, bytes32 kind, bytes calldata value) internal {
         if (value.length > MAX_RECORD_BYTES) revert RecordTooLarge();
-        _activeAttestation(owner, index);
         if (value.length == 0) {
+            // Clearing is allowed on revoked entries too, so nothing stays frozen on a dead claim.
+            if (index >= _attestations[owner].length) revert IndexOutOfBounds();
             delete _records[owner][index][kind];
         } else {
+            _activeAttestation(owner, index);
             _records[owner][index][kind] = SSTORE2.write(value);
         }
         emit RecordSet(owner, index, kind, msg.sender);
@@ -373,6 +434,12 @@ contract PGPRegistry {
         ));
     }
 
+    function _rangeLength(uint256 total, uint256 start, uint256 count) internal pure returns (uint256) {
+        if (start >= total) return 0;
+        uint256 remaining = total - start;
+        return count < remaining ? count : remaining;
+    }
+
     function _activeAttestation(address owner, uint256 index) internal view returns (Attestation storage a) {
         if (index >= _attestations[owner].length) revert IndexOutOfBounds();
         a = _attestations[owner][index];
@@ -381,7 +448,10 @@ contract PGPRegistry {
 
     /**
      * @dev Verify an EIP-712 authorization from `owner` over `structHash` and consume the nonce.
-     *      EOAs: ecrecover. Accounts with code (smart wallets, EIP-7702 delegations): EIP-1271.
+     *      EOAs: ecrecover over a 65-byte r‖s‖v signature (v ∈ {27,28}, low s).
+     *      Accounts with code — smart wallets and EIP-7702-delegated EOAs — go through EIP-1271,
+     *      so a delegated EOA needs a delegate that implements `isValidSignature`.
+     *      `deadline` is inclusive. The nonce is consumed only when the whole call succeeds.
      */
     function _authorize(address owner, bytes32 structHash, uint256 deadline, bytes calldata signature) internal {
         if (block.timestamp > deadline) revert AuthorizationExpired();
@@ -391,7 +461,7 @@ contract PGPRegistry {
             (bool ok, bytes memory ret) = owner.staticcall(
                 abi.encodeWithSelector(ERC1271_MAGIC, digest, signature)
             );
-            if (!ok || ret.length < 32 || abi.decode(ret, (bytes4)) != ERC1271_MAGIC) revert InvalidAuthorization();
+            if (!ok || ret.length < 32 || abi.decode(ret, (bytes32)) != bytes32(ERC1271_MAGIC)) revert InvalidAuthorization();
         } else {
             if (signature.length != 65) revert InvalidAuthorization();
             bytes32 r = bytes32(signature[0:32]);
@@ -404,6 +474,8 @@ contract PGPRegistry {
             if (recovered == address(0) || recovered != owner) revert InvalidAuthorization();
         }
 
-        unchecked { nonces[owner]++; }
+        uint256 used = nonces[owner];
+        unchecked { nonces[owner] = used + 1; }
+        emit NonceUsed(owner, used);
     }
 }

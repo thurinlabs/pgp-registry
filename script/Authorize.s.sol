@@ -18,6 +18,8 @@ import {PGPRegistry} from "../PGPRegistry.sol";
  *   ACTION=setRecord … INDEX=0 KIND=0x<bytes32> VALUE=0x<hex>
  *
  * Deadline defaults to now + 1 hour. Never sign an authorization you did not compose.
+ * The submitter must pass byte-identical payloads (same trailing newline) or the hash won't match.
+ * To burn an outstanding authorization: `cast send <registry> "cancelAuthorization()"`.
  */
 contract Authorize is Script {
     function run() external view {
@@ -25,7 +27,8 @@ contract Authorize is Script {
         address owner = vm.envAddress("OWNER");
         string memory action = vm.envString("ACTION");
         uint256 deadline = vm.envOr("DEADLINE", block.timestamp + 1 hours);
-        uint256 nonce = registry.nonces(owner);
+        // NONCE overrides the on-chain value when preparing several authorizations ahead of time.
+        uint256 nonce = vm.envOr("NONCE", registry.nonces(owner));
 
         bytes32 structHash;
         bytes32 a = keccak256(bytes(action));
@@ -57,6 +60,7 @@ contract Authorize is Script {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", registry.DOMAIN_SEPARATOR(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(owner, digest);
 
+        console.log("digest:   ", vm.toString(digest));
         console.log("action:   ", action);
         console.log("owner:    ", owner);
         console.log("nonce:    ", nonce);

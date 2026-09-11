@@ -15,6 +15,18 @@ contract MockWallet {
     }
 }
 
+/// Returns the magic value but with dirty padding in the word.
+contract DirtyWallet {
+    function isValidSignature(bytes32, bytes calldata) external pure returns (bytes32) {
+        return bytes32(uint256(0x1626ba7e00000000000000000000000000000000000000000000000000000001));
+    }
+}
+
+/// Echoes calldata from its fallback: the first 4 return bytes are the selector.
+contract EchoWallet {
+    fallback(bytes calldata data) external returns (bytes memory) { return data; }
+}
+
 contract RejectingWallet {
     function isValidSignature(bytes32, bytes calldata) external pure returns (bytes4) { return 0; }
 }
@@ -35,7 +47,7 @@ contract PGPRegistryTest is Test {
 
     bytes constant FP4  = hex"6e0053911942a889426c1866e34d9266098f7fe7";                                  // 20 bytes
     bytes constant FP4B = hex"76bf00000000000000000000e34d9266098f7fe7";                                  // 20 bytes, same key id as FP4
-    bytes constant FP6  = hex"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";          // 32 bytes
+    bytes constant FP6  = hex"00112233445566778899aabbccddeeff0f1e2d3c4b5a69788796a5b4c3d2e1f0";          // 32 bytes, key id = first 8
     bytes constant SIG  = "-----BEGIN PGP SIGNED MESSAGE-----\nI control the Ethereum address: 0x...\n-----END PGP SIGNATURE-----";
     bytes constant KEY  = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmDMEZ...\n-----END PGP PUBLIC KEY BLOCK-----";
     bytes constant KEY2 = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmDMEZ...with-notations\n-----END PGP PUBLIC KEY BLOCK-----";
@@ -120,8 +132,8 @@ contract PGPRegistryTest is Test {
 
     function test_attest_emits_event() public {
         vm.prank(alice);
-        vm.expectEmit(true, true, true, true);
-        emit PGPRegistry.Attested(alice, keccak256(FP4), 0, FP4, 1, alice);
+        vm.expectEmit(true, true, true, false);
+        emit PGPRegistry.Attested(alice, keccak256(FP4), 0, FP4, 1, address(0), address(0), alice);
         registry.attest(FP4, SIG, KEY);
     }
 
@@ -240,8 +252,8 @@ contract PGPRegistryTest is Test {
         vm.prank(alice);
         vm.expectEmit(true, true, true, true);
         emit PGPRegistry.Revoked(alice, keccak256(FP4), 0, alice);
-        vm.expectEmit(true, true, true, true);
-        emit PGPRegistry.Attested(alice, keccak256(FP6), 1, FP6, 1, alice);
+        vm.expectEmit(true, true, true, false);
+        emit PGPRegistry.Attested(alice, keccak256(FP6), 1, FP6, 1, address(0), address(0), alice);
         registry.reattest(0, FP6, SIG, KEY);
     }
 
@@ -272,8 +284,8 @@ contract PGPRegistryTest is Test {
         _attestAlice();
         address oldPtr = registry.getAttestation(alice, 0).keyPtr;
         vm.prank(alice);
-        vm.expectEmit(true, true, true, true);
-        emit PGPRegistry.KeyUpdated(alice, keccak256(FP4), 0, alice);
+        vm.expectEmit(true, true, true, false);
+        emit PGPRegistry.KeyUpdated(alice, keccak256(FP4), 0, address(0), address(0), alice);
         registry.updateKey(0, KEY2);
 
         PGPRegistry.Attestation memory a = registry.getAttestation(alice, 0);
@@ -383,9 +395,15 @@ contract PGPRegistryTest is Test {
 
         _attestAlice();
         vm.startPrank(alice);
-        registry.revoke(0);
-        vm.expectRevert(PGPRegistry.AlreadyRevoked.selector);
         registry.setRecord(0, KIND, "x");
+        registry.revoke(0);
+        assertEq(registry.record(alice, 0, KIND), "x");         // still readable (readers gate on revokedAt)
+        vm.expectRevert(PGPRegistry.AlreadyRevoked.selector);
+        registry.setRecord(0, KIND, "y");                       // cannot set
+        registry.setRecord(0, KIND, "");                        // can clear
+        assertEq(registry.record(alice, 0, KIND), "");
+        vm.expectRevert(PGPRegistry.IndexOutOfBounds.selector);
+        registry.setRecord(7, KIND, "");
         vm.stopPrank();
     }
 
@@ -453,10 +471,11 @@ contract PGPRegistryTest is Test {
         assertEq(fps[1], FP4B);
         assertEq(registry.fingerprintsForKeyId(bytes8(hex"0000000000000000")).length, 0);
 
-        // v6: key id is still the last 8 bytes
+        // v6: the long key id is the HIGH-order 8 bytes (RFC 9580 §5.5.4.3)
         vm.prank(bob);
         registry.attest(FP6, SIG, KEY);
-        assertEq(registry.fingerprintsForKeyId(bytes8(hex"0123456789abcdef")).length, 1);
+        assertEq(registry.fingerprintsForKeyId(bytes8(hex"0011223344556677")).length, 1);
+        assertEq(registry.fingerprintsForKeyId(bytes8(hex"8796a5b4c3d2e1f0")).length, 0);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -468,8 +487,8 @@ contract PGPRegistryTest is Test {
         bytes memory sig = _sign(ALICE_PK, _attestHash(alice, FP4, SIG, KEY, 0, deadline));
 
         vm.prank(relayer);
-        vm.expectEmit(true, true, true, true);
-        emit PGPRegistry.Attested(alice, keccak256(FP4), 0, FP4, 1, relayer);
+        vm.expectEmit(true, true, true, false);
+        emit PGPRegistry.Attested(alice, keccak256(FP4), 0, FP4, 1, address(0), address(0), relayer);
         uint256 idx = registry.attestFor(alice, FP4, SIG, KEY, deadline, sig);
 
         assertEq(idx, 0);
@@ -571,8 +590,8 @@ contract PGPRegistryTest is Test {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _sign(ALICE_PK, _updateKeyHash(alice, 0, KEY2, 0, deadline));
         vm.prank(relayer);
-        vm.expectEmit(true, true, true, true);
-        emit PGPRegistry.KeyUpdated(alice, keccak256(FP4), 0, relayer);
+        vm.expectEmit(true, true, true, false);
+        emit PGPRegistry.KeyUpdated(alice, keccak256(FP4), 0, address(0), address(0), relayer);
         registry.updateKeyFor(alice, 0, KEY2, deadline, sig);
         (, bytes memory key) = registry.getPayload(alice, 0);
         assertEq(key, KEY2);
@@ -663,6 +682,179 @@ contract PGPRegistryTest is Test {
         assertTrue(registry.DOMAIN_SEPARATOR() != expected);
     }
 
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  audit follow-ups (2026-09-11)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function test_stale_authorization_is_cancellable() public {
+        uint256 deadline = block.timestamp + 30 days;
+        bytes memory sig = _sign(ALICE_PK, _attestHash(alice, FP4, SIG, KEY, 0, deadline));
+
+        // owner attests directly first: the relayed copy fails and the nonce stays unused
+        _attestAlice();
+        vm.prank(relayer);
+        vm.expectRevert(PGPRegistry.DuplicateActiveFingerprint.selector);
+        registry.attestFor(alice, FP4, SIG, KEY, deadline, sig);
+        assertEq(registry.nonces(alice), 0);
+
+        // owner revokes and burns the outstanding authorization
+        vm.startPrank(alice);
+        registry.revoke(0);
+        vm.expectEmit(true, false, false, true);
+        emit PGPRegistry.NonceUsed(alice, 0);
+        registry.cancelAuthorization();
+        vm.stopPrank();
+        assertEq(registry.nonces(alice), 1);
+
+        // the stale signature can no longer resurrect the claim
+        vm.prank(relayer);
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.attestFor(alice, FP4, SIG, KEY, deadline, sig);
+        (bool found,,) = registry.current(alice);
+        assertFalse(found);
+    }
+
+    function test_For_variants_reject_tampering_and_cross_type_replay() public {
+        _attestAlice();
+        uint256 deadline = block.timestamp + 1 hours;
+        vm.startPrank(relayer);
+
+        bytes memory rev = _sign(ALICE_PK, _revokeHash(alice, 0, 0, deadline));
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.revokeFor(alice, 1, deadline, rev);                       // wrong index
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.updateKeyFor(alice, 0, KEY2, deadline, rev);              // Revoke sig fed to updateKeyFor
+
+        bytes memory upd = _sign(ALICE_PK, _updateKeyHash(alice, 0, KEY2, 0, deadline));
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.updateKeyFor(alice, 0, KEY, deadline, upd);               // different key
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.updateKeyFor(alice, 1, KEY2, deadline, upd);              // different index
+
+        bytes memory rec = _sign(ALICE_PK, _setRecordHash(alice, 0, KIND, "v", 0, deadline));
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.setRecordFor(alice, 0, keccak256("other"), "v", deadline, rec);   // different kind
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.setRecordFor(alice, 0, KIND, "w", deadline, rec);                 // different value
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.setRecordFor(alice, 0, KIND, "", deadline, rec);                  // clear ≠ set
+
+        bytes memory re = _sign(ALICE_PK, _reattestHash(alice, 0, FP6, SIG, KEY, 0, deadline));
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.reattestFor(alice, 1, FP6, SIG, KEY, deadline, re);       // different revokeIndex
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.attestFor(alice, FP6, SIG, KEY, deadline, re);            // Reattest sig fed to attestFor
+        vm.stopPrank();
+
+        assertEq(registry.nonces(alice), 0); // nothing consumed by failed calls
+    }
+
+    function test_reattestFor_same_fingerprint() public {
+        _attestAlice();
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _sign(ALICE_PK, _reattestHash(alice, 0, FP4, SIG, KEY2, 0, deadline));
+        vm.prank(relayer);
+        uint256 idx = registry.reattestFor(alice, 0, FP4, SIG, KEY2, deadline, sig);
+        assertEq(idx, 1);
+        assertTrue(registry.getAttestation(alice, 0).revokedAt != 0);
+        (, bytes memory key) = registry.getPayload(alice, 1);
+        assertEq(key, KEY2);
+    }
+
+    function test_setRecordFor_clear_after_revoke() public {
+        _attestAlice();
+        vm.startPrank(alice);
+        registry.setRecord(0, KIND, "v");
+        registry.revoke(0);
+        vm.stopPrank();
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _sign(ALICE_PK, _setRecordHash(alice, 0, KIND, "", 0, deadline));
+        vm.prank(relayer);
+        registry.setRecordFor(alice, 0, KIND, "", deadline, sig);
+        assertEq(registry.record(alice, 0, KIND), "");
+    }
+
+    function test_deadline_is_inclusive() public {
+        uint256 deadline = block.timestamp;
+        bytes memory sig = _sign(ALICE_PK, _attestHash(alice, FP4, SIG, KEY, 0, deadline));
+        vm.prank(relayer);
+        registry.attestFor(alice, FP4, SIG, KEY, deadline, sig);
+        assertEq(registry.attestationCount(alice), 1);
+    }
+
+    function test_signature_encoding_is_strict() public {
+        uint256 deadline = block.timestamp + 1 hours;
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ALICE_PK, _digest(_attestHash(alice, FP4, SIG, KEY, 0, deadline)));
+        vm.startPrank(relayer);
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.attestFor(alice, FP4, SIG, KEY, deadline, abi.encodePacked(r, s, uint8(v - 27)));   // v ∈ {0,1}
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.attestFor(alice, FP4, SIG, KEY, deadline, abi.encodePacked(r, s, v, uint8(0)));      // 66 bytes
+        vm.stopPrank();
+    }
+
+    function test_erc1271_dirty_returns_are_rejected_cleanly() public {
+        address owner = address(new DirtyWallet());
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _sign(ALICE_PK, _attestHash(owner, FP4, SIG, KEY, 0, deadline));
+        vm.prank(relayer);
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.attestFor(owner, FP4, SIG, KEY, deadline, sig);
+
+        // echo fallback: first 4 bytes of the return happen to be the selector
+        owner = address(new EchoWallet());
+        sig = _sign(ALICE_PK, _attestHash(owner, FP4, SIG, KEY, 0, deadline));
+        vm.prank(relayer);
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.attestFor(owner, FP4, SIG, KEY, deadline, sig);
+    }
+
+    function test_eip7702_delegated_eoa_uses_1271_path() public {
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _sign(ALICE_PK, _attestHash(alice, FP4, SIG, KEY, 0, deadline));
+
+        // delegate without isValidSignature → ECDSA path is gone, call is rejected
+        vm.etch(alice, abi.encodePacked(hex"ef0100", address(new RejectingWallet())));
+        vm.prank(relayer);
+        vm.expectRevert(PGPRegistry.InvalidAuthorization.selector);
+        registry.attestFor(alice, FP4, SIG, KEY, deadline, sig);
+
+        // 1271-capable delegate that trusts alice's EOA key → works
+        vm.etch(alice, abi.encodePacked(hex"ef0100", address(new MockWallet(alice))));
+        vm.prank(relayer);
+        registry.attestFor(alice, FP4, SIG, KEY, deadline, sig);
+        assertEq(registry.attestationCount(alice), 1);
+    }
+
+    function test_paginated_getters() public {
+        vm.startPrank(alice);
+        registry.attest(FP4, SIG, KEY);    // 0
+        registry.attest(FP6, SIG, KEY);    // 1
+        registry.attest(FP4B, SIG, KEY);   // 2
+        vm.stopPrank();
+        vm.prank(bob);
+        registry.attest(FP4, SIG, KEY);
+
+        PGPRegistry.Attestation[] memory page = registry.attestationsOfRange(alice, 1, 5);
+        assertEq(page.length, 2);
+        assertEq(page[0].fingerprint, FP6);
+        assertEq(registry.attestationsOfRange(alice, 3, 1).length, 0);
+        assertEq(registry.attestationsOfRange(alice, 0, 0).length, 0);
+
+        bytes32 h = keccak256(FP4);
+        assertEq(registry.addressesForCount(h), 2);
+        address[] memory owners = registry.addressesForRange(h, 1, 10);
+        assertEq(owners.length, 1);
+        assertEq(owners[0], bob);
+
+        bytes8 keyId = bytes8(hex"e34d9266098f7fe7");
+        assertEq(registry.fingerprintsForKeyIdCount(keyId), 2);
+        bytes[] memory fps = registry.fingerprintsForKeyIdRange(keyId, 0, 1);
+        assertEq(fps.length, 1);
+        assertEq(fps[0], FP4);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     //  fuzz
     // ═══════════════════════════════════════════════════════════════════════
@@ -683,7 +875,7 @@ contract PGPRegistryTest is Test {
         registry.attest(fp, SIG, KEY);
         assertEq(registry.getAttestation(alice, 0).fingerprint, fp);
         assertEq(registry.addressesFor(keccak256(fp))[0], alice);
-        bytes8 keyId = v6 ? bytes8(raw << 192) : bytes8(raw << 96);
+        bytes8 keyId = v6 ? bytes8(raw) : bytes8(raw << 96);
         assertEq(registry.fingerprintsForKeyId(keyId)[0], fp);
     }
 
@@ -798,7 +990,102 @@ contract PGPRegistryVectorTest is Test {
         emit log_named_bytes32("domainSeparator", registry.DOMAIN_SEPARATOR());
         emit log_named_bytes32("attestStructHash", structHash);
         emit log_named_bytes32("attestDigest", digest);
+        bytes32 ds = registry.DOMAIN_SEPARATOR();
         bytes32 revokeHash = keccak256(abi.encode(registry.REVOKE_TYPEHASH(), owner, uint256(1), nonce, deadline));
-        emit log_named_bytes32("revokeDigest", keccak256(abi.encodePacked("\x19\x01", registry.DOMAIN_SEPARATOR(), revokeHash)));
+        emit log_named_bytes32("revokeDigest", keccak256(abi.encodePacked("\x19\x01", ds, revokeHash)));
+        bytes32 reHash = keccak256(abi.encode(registry.REATTEST_TYPEHASH(), owner, uint256(1), keccak256(fp), keccak256(sig), keccak256(key), nonce, deadline));
+        emit log_named_bytes32("reattestDigest", keccak256(abi.encodePacked("\x19\x01", ds, reHash)));
+        bytes32 upHash = keccak256(abi.encode(registry.UPDATE_KEY_TYPEHASH(), owner, uint256(1), keccak256(key), nonce, deadline));
+        emit log_named_bytes32("updateKeyDigest", keccak256(abi.encodePacked("\x19\x01", ds, upHash)));
+        bytes32 recHash = keccak256(abi.encode(registry.SET_RECORD_TYPEHASH(), owner, uint256(1), keccak256("thurin.test"), keccak256(bytes("hello")), nonce, deadline));
+        emit log_named_bytes32("setRecordDigest", keccak256(abi.encodePacked("\x19\x01", ds, recHash)));
+    }
+}
+
+
+// ─── Invariants: many owners, random sequences, the one-active rule always holds ───
+
+contract RegistryHandler is Test {
+    PGPRegistry public registry;
+    address[] public owners;
+    bytes[] public fps;
+
+    constructor(PGPRegistry r) {
+        registry = r;
+        owners.push(address(0xA1)); owners.push(address(0xA2)); owners.push(address(0xA3));
+        fps.push(hex"6e0053911942a889426c1866e34d9266098f7fe7");
+        fps.push(hex"76bf00000000000000000000e34d9266098f7fe7");
+        fps.push(hex"00112233445566778899aabbccddeeff0f1e2d3c4b5a69788796a5b4c3d2e1f0");
+    }
+
+    function attest(uint8 o, uint8 f) external {
+        address owner = owners[o % owners.length];
+        vm.prank(owner);
+        try registry.attest(fps[f % fps.length], "sig", "key") {} catch {}
+    }
+    function revoke(uint8 o, uint8 i) external {
+        address owner = owners[o % owners.length];
+        uint256 n = registry.attestationCount(owner);
+        if (n == 0) return;
+        vm.prank(owner);
+        try registry.revoke(i % n) {} catch {}
+    }
+    function reattest(uint8 o, uint8 i, uint8 f) external {
+        address owner = owners[o % owners.length];
+        uint256 n = registry.attestationCount(owner);
+        if (n == 0) return;
+        vm.prank(owner);
+        try registry.reattest(i % n, fps[f % fps.length], "sig", "key2") {} catch {}
+    }
+    function updateKey(uint8 o, uint8 i) external {
+        address owner = owners[o % owners.length];
+        uint256 n = registry.attestationCount(owner);
+        if (n == 0) return;
+        vm.prank(owner);
+        try registry.updateKey(i % n, "key3") {} catch {}
+    }
+}
+
+contract PGPRegistryInvariantTest is Test {
+    PGPRegistry registry;
+    RegistryHandler handler;
+
+    function setUp() public {
+        registry = new PGPRegistry();
+        handler = new RegistryHandler(registry);
+        targetContract(address(handler));
+    }
+
+    function invariant_at_most_one_active_per_owner_and_fingerprint() public view {
+        for (uint256 o = 0; o < 3; o++) {
+            address owner = handler.owners(o);
+            PGPRegistry.Attestation[] memory all = registry.attestationsOf(owner);
+            for (uint256 f = 0; f < 3; f++) {
+                bytes32 h = keccak256(handler.fps(f));
+                uint256 active;
+                for (uint256 i = 0; i < all.length; i++) {
+                    if (all[i].revokedAt == 0 && keccak256(all[i].fingerprint) == h) active++;
+                }
+                assertLe(active, 1);
+            }
+        }
+    }
+
+    function invariant_indexes_are_deduped_and_payloads_readable() public view {
+        for (uint256 f = 0; f < 3; f++) {
+            bytes memory fp = handler.fps(f);
+            address[] memory owners = registry.addressesFor(keccak256(fp));
+            for (uint256 i = 0; i < owners.length; i++)
+                for (uint256 j = i + 1; j < owners.length; j++) assertTrue(owners[i] != owners[j]);
+            assertLe(registry.addressesForCount(keccak256(fp)), 3);
+        }
+        for (uint256 o = 0; o < 3; o++) {
+            address owner = handler.owners(o);
+            uint256 n = registry.attestationCount(owner);
+            if (n > 0) {
+                (bytes memory sig,) = registry.getPayload(owner, n - 1);
+                assertEq(sig, "sig");
+            }
+        }
     }
 }
