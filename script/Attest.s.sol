@@ -4,19 +4,27 @@ pragma solidity ^0.8.24;
 import {Script, console} from "forge-std/Script.sol";
 import {PGPRegistry} from "../PGPRegistry.sol";
 
+/**
+ * Direct attest from the broadcasting account.
+ *
+ *   REGISTRY=0x... FINGERPRINT=0x<40 or 64 hex> \
+ *   forge script script/Attest.s.sol --rpc-url sepolia --account <name> --broadcast
+ *
+ * Reads script/pgp-sig.txt (clearsigned message) and script/pgp-key.txt (armored key).
+ */
 contract Attest is Script {
     function run() external {
-        string memory fingerprint = "6E0053911942A889426C1866E34D9266098F7FE7";
+        PGPRegistry registry = PGPRegistry(vm.envAddress("REGISTRY"));
+        bytes memory fingerprint = vm.envBytes("FINGERPRINT");
         // forge-lint: disable-next-line(unsafe-cheatcode)
-        string memory pgpSignature = vm.readFile("script/pgp-sig.txt");
+        bytes memory pgpSignature = bytes(vm.readFile("script/pgp-sig.txt"));
         // forge-lint: disable-next-line(unsafe-cheatcode)
-        string memory pgpPublicKey = vm.readFile("script/pgp-key.txt");
+        bytes memory pgpPublicKey = bytes(vm.readFile("script/pgp-key.txt"));
 
         vm.startBroadcast();
-        PGPRegistry registry = PGPRegistry(0x6Ccb62769675B1f19375E5f4C6E8Fc418e50BFD0);
-        registry.attest(fingerprint, pgpSignature, pgpPublicKey);
+        uint256 index = registry.attest(fingerprint, pgpSignature, pgpPublicKey);
         vm.stopBroadcast();
 
-        console.log("Attested fingerprint:", fingerprint);
+        console.log("Attested at index:", index);
     }
 }

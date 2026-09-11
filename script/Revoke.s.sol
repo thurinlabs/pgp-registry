@@ -4,13 +4,18 @@ pragma solidity ^0.8.24;
 import {Script, console} from "forge-std/Script.sol";
 import {PGPRegistry} from "../PGPRegistry.sol";
 
+/**
+ *   REGISTRY=0x... INDEX=0 forge script script/Revoke.s.sol --rpc-url sepolia --account <name> --broadcast
+ */
 contract Revoke is Script {
     function run() external {
+        PGPRegistry registry = PGPRegistry(vm.envAddress("REGISTRY"));
+        uint256 index = vm.envUint("INDEX");
+
         vm.startBroadcast();
-        PGPRegistry registry = PGPRegistry(0x6Ccb62769675B1f19375E5f4C6E8Fc418e50BFD0);
-        registry.revoke(0);
+        registry.revoke(index);
         vm.stopBroadcast();
 
-        console.log("Revoked attestation at index 0");
+        console.log("Revoked attestation at index:", index);
     }
 }
