@@ -25,8 +25,8 @@ Design record: the `ADR-registry-v2` note in the Thurin Labs vault.
 
 | Network | Address | Deploy block |
 |---|---|---|
-| Sepolia | _pending_ | |
-| Ethereum mainnet | _pending_ | |
+| Sepolia | [`0x9302E02e2869e129aC8516fE5eFFd51EA3082c09`](https://sepolia.etherscan.io/address/0x9302E02e2869e129aC8516fE5eFFd51EA3082c09) | 11683667 |
+| Ethereum mainnet | [`0x9302E02e2869e129aC8516fE5eFFd51EA3082c09`](https://etherscan.io/address/0x9302E02e2869e129aC8516fE5eFFd51EA3082c09) | 25962908 |
 
 The address is the same on every chain: the deploy script uses CREATE2 via the canonical deployer with salt `keccak256("thurin.pgp-registry.v2")`. Predicted from the current source: `0x9302E02e2869e129aC8516fE5eFFd51EA3082c09` (bytecode must be built from the same commit and settings).
 
