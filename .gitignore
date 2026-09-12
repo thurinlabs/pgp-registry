@@ -5,3 +5,4 @@ reports/
 .env.*
 broadcast/**/31337/
 CLAUDE-SECURITY-*/
+broadcast/**/dry-run/
