@@ -125,6 +125,10 @@ Deploy (dry run first, then with `--broadcast --verify`):
 forge script script/Deploy.s.sol --rpc-url sepolia --account <keystore>
 ```
 
+## License
+
+MIT
+
 ## Links
 
 - [Attest](https://thurin.id/attest) — create identity claims
