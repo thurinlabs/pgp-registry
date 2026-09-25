@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.37;
 
-/**
- * @title Armor
- * @notice OpenPGP ASCII armor (base64 in 64-character lines, a CRC-24 checksum line) and back. Only
- *         the views use it, so keys and statements paste straight into gpg; writes never depend on it.
- *         The loops are assembly so a 16 KB key stays well inside a node's gas limit for one call.
- */
+/// @title Armor
+/// @notice OpenPGP ASCII armor (base64 in 64-character lines, a CRC-24 checksum line) and back
+/// @dev Only the views use it, so keys and statements paste straight into gpg; writes never depend on it.
+/// The loops are assembly so a 16 KB key stays well inside a node's gas limit for one call.
 library Armor {
     bytes internal constant ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     /// CRC-24 of every byte value (256 entries of 3 bytes), for the table-driven checksum.
@@ -14,14 +12,21 @@ library Armor {
     /// ASCII → base64 value; 0xFF for characters that aren't base64.
     bytes internal constant DECODE_TABLE = hex"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff3effffff3f3435363738393a3b3c3dffffffffffffff000102030405060708090a0b0c0d0e0f10111213141516171819ffffffffffff1a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233ffffffffff";
 
+    /// @notice Thrown when a paste has no `-----BEGIN PGP …-----` and `-----END PGP …-----` lines
     error NotArmored();
+    /// @notice Thrown when the armored data isn't valid base64
     error BadBase64();
+    /// @notice Thrown when the armor's `=` checksum doesn't match its data; the paste was changed or cut short
     error BadArmorChecksum();
+    /// @notice Thrown when armor header lines (e.g. `Comment:`) can't be told from the data, as when line breaks were lost; remove them
     error UnsupportedHeader();
 
     // ─── Building armor ──────────────────────────────────────────────────────
 
-    /// @notice `-----BEGIN PGP <label>-----`, a blank line, base64 lines, `=` + checksum, END line.
+    /// @notice Wraps bytes in OpenPGP armor
+    /// @param label The block type, e.g. "PUBLIC KEY BLOCK" or "SIGNATURE"
+    /// @param data The bytes to armor
+    /// @return The BEGIN line, a blank line, base64 in 64-character lines, `=` and the checksum, the END line
     function armor(string memory label, bytes memory data) internal pure returns (string memory) {
         return string.concat(
             "-----BEGIN PGP ", label, "-----\n\n",
@@ -31,8 +36,11 @@ library Armor {
         );
     }
 
-    /// @notice A clearsigned message: the header, the signed text, then the armored signature.
-    ///         `Hash:` is required by gpg (except for version 6 signatures) and is read from the signature.
+    /// @notice Builds a clearsigned message from a text and its detached signature
+    /// @param text The signed text
+    /// @param signature The detached text-mode signature, as raw bytes
+    /// @return The header, the text, then the armored signature
+    /// @dev gpg requires `Hash:` except for version 6 signatures; it's read from the signature packet.
     function clearsign(string memory text, bytes memory signature) internal pure returns (string memory) {
         (uint8 version, string memory hash) = signatureHash(signature);
         string memory header = version != 6 && bytes(hash).length > 0
@@ -41,12 +49,17 @@ library Armor {
         return string.concat(header, text, "\n", armor("SIGNATURE", signature));
     }
 
-    /// @notice Standard base64 with padding, on one line.
+    /// @notice Standard base64 with padding, on one line
+    /// @param data The bytes to encode
+    /// @return The base64 text
     function base64(bytes memory data) internal pure returns (bytes memory) {
         return _encode(data, false);
     }
 
-    /// @notice CRC-24 as OpenPGP defines it (initial value 0xB704CE, polynomial 0x1864CFB).
+    /// @notice The CRC-24 checksum OpenPGP armor ends with
+    /// @param data The bytes to checksum
+    /// @return crc The 24-bit checksum
+    /// @dev Initial value 0xB704CE, polynomial 0x1864CFB.
     function crc24(bytes memory data) internal pure returns (uint256 crc) {
         bytes memory table = CRC_TABLE;
         assembly ("memory-safe") {
@@ -61,8 +74,11 @@ library Armor {
         }
     }
 
-    /// @notice The signature packet's version and its hash algorithm's armor name. Reads the packet
-    ///         header and one body byte; nothing else. (0, "") if it isn't a readable signature packet.
+    /// @notice A signature packet's version and hash algorithm
+    /// @param sig The signature packet, as raw bytes
+    /// @return version The signature version, or 0 if it isn't a readable signature packet
+    /// @return name The hash algorithm's armor name, e.g. "SHA512", or "" if unknown
+    /// @dev Reads the packet header and one body byte, nothing else.
     function signatureHash(bytes memory sig) internal pure returns (uint8 version, string memory name) {
         uint256 off = _bodyOffset(sig);
         if (off == type(uint256).max || sig.length < off + 4) return (0, "");
@@ -80,11 +96,11 @@ library Armor {
 
     // ─── Reading armor ───────────────────────────────────────────────────────
 
-    /**
-     * @notice The bytes inside an armored block. Whitespace anywhere is ignored (contract tools may
-     *         flatten line breaks when you paste), armor header lines are skipped, and the checksum
-     *         is checked when present. For a clearsigned message, the signature block is used.
-     */
+    /// @notice The bytes inside an armored block
+    /// @param armored An armored block, or a clearsigned message (its signature block is used)
+    /// @return data The decoded bytes
+    /// @dev Whitespace anywhere is ignored, since contract tools may flatten line breaks in a paste. Header
+    /// lines are skipped when line breaks survive, and the checksum is checked when present.
     function decode(string memory armored) internal pure returns (bytes memory data) {
         bytes memory t = bytes(armored);
         (uint256 start, uint256 end) = _body(t);
