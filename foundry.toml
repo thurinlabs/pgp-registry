@@ -3,7 +3,6 @@ src = "."
 test = "."
 out = "out"
 script = "script"
-solc = "0.8.24"
 via_ir = true
 optimizer = true
 optimizer_runs = 200
@@ -11,7 +10,7 @@ evm_version = "cancun"
 bytecode_hash = "none"
 cbor_metadata = false
 
-fs_permissions = [{ access = "read", path = "script/" }]
+fs_permissions = [{ access = "read", path = "script/" }, { access = "read", path = "fixtures/" }]
 
 [lint]
 ignore = ["lib/**/*.sol"]

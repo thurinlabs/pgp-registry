@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Script, console} from "forge-std/Script.sol";
-import {PGPRegistry} from "../PGPRegistry.sol";
+import {PGPRegistryV2 as PGPRegistry} from "../legacy/PGPRegistryV2.sol";
 
 /**
  * Produce an EIP-712 authorization for a relayed write, signed by the unlocked --account

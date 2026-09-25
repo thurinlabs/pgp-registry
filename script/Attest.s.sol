@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Script, console} from "forge-std/Script.sol";
-import {PGPRegistry} from "../PGPRegistry.sol";
+import {PGPRegistryV2 as PGPRegistry} from "../legacy/PGPRegistryV2.sol";
 
 /**
  * Direct attest from the broadcasting account.

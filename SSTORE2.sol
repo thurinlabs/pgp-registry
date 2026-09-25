@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.24;
+pragma solidity ^0.8.24;
 
 /**
  * @title SSTORE2
@@ -26,6 +26,32 @@ library SSTORE2 {
             pointer := create(0, add(creationCode, 0x20), mload(creationCode))
         }
         if (pointer == address(0)) revert DeploymentFailed();
+    }
+
+    /// @notice Like `write`, but at an address derived from the data (CREATE2, salt = its hash). If
+    ///         the same data is already stored, the existing pointer is returned and nothing is paid
+    ///         for the bytes. Only this contract can deploy at these addresses, so the code there is
+    ///         always exactly the data.
+    function writeOnce(bytes memory data) internal returns (address pointer) {
+        bytes memory creationCode = abi.encodePacked(CREATION_PREFIX, hex"00", data);
+        bytes32 salt = keccak256(data);
+        pointer = address(uint160(uint256(keccak256(
+            abi.encodePacked(bytes1(0xff), address(this), salt, keccak256(creationCode))
+        ))));
+        if (pointer.code.length > 0) return pointer;
+        address deployed;
+        assembly ("memory-safe") {
+            deployed := create2(0, add(creationCode, 0x20), mload(creationCode), salt)
+        }
+        if (deployed != pointer) revert DeploymentFailed();
+    }
+
+    /// @notice `size` bytes of the stored data starting at `start`.
+    function readRange(address pointer, uint256 start, uint256 size) internal view returns (bytes memory data) {
+        data = new bytes(size);
+        assembly ("memory-safe") {
+            extcodecopy(pointer, add(data, 0x20), add(start, DATA_OFFSET), size)
+        }
     }
 
     function read(address pointer) internal view returns (bytes memory data) {

@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.37;
 
 import {Script, console} from "forge-std/Script.sol";
 import {PGPRegistry} from "../PGPRegistry.sol";
 
 /**
- * Deploys PGPRegistry v2 through the canonical CREATE2 deployer with a fixed salt, so the
- * address is identical on every chain that has the deployer (Sepolia, mainnet). On a chain
- * without it (a plain anvil instance) it falls back to a normal CREATE and says so.
- * The deployer account has no privileges over the contract.
+ * Deploys PGPRegistry v3 through the canonical CREATE2 deployer with a fixed salt, so the address is
+ * identical on every chain that has the deployer. On a chain without it (a plain anvil instance) it
+ * falls back to a normal CREATE and says so. The deployer account has no privileges over the contract.
  *
  *   forge script script/Deploy.s.sol --rpc-url sepolia --account <name> --broadcast --verify
  *   forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --private-key <anvil key> --broadcast
  */
 contract Deploy is Script {
-    bytes32 public constant SALT = keccak256("thurin.pgp-registry.v2");
+    bytes32 public constant SALT = keccak256("thurin.pgp-registry.v3");
     address public constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
     function run() external {
@@ -35,7 +34,7 @@ contract Deploy is Script {
             vm.stopBroadcast();
         }
 
-        console.log("PGPRegistry v2 deployed at:", address(registry));
+        console.log("PGPRegistry v3 deployed at:", address(registry));
         console.log("VERSION:", registry.VERSION());
     }
 }
