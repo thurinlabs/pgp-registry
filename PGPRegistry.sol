@@ -147,7 +147,15 @@ contract PGPRegistry {
         uint256 replacedBy,
         address submitter
     );
-    event RecordSet(address indexed owner, uint256 indexed index, bytes32 indexed kindHash, string kind, address submitter);
+    /// @param value The new text ("" = cleared). Every value a record has had stays in these events.
+    event RecordSet(
+        address indexed owner,
+        uint256 indexed index,
+        bytes32 indexed kindHash,
+        string kind,
+        string value,
+        address submitter
+    );
     event NonceUsed(address indexed owner, uint256 nonce);
 
     // ─── Storage ─────────────────────────────────────────────────────────────
@@ -606,7 +614,7 @@ contract PGPRegistry {
             if (_recordValue[owner][set][kindHash] == 0) _rememberKind(owner, set, name);
             _recordValue[owner][set][kindHash] = word;
         }
-        emit RecordSet(owner, index, kindHash, string(name), msg.sender);
+        emit RecordSet(owner, index, kindHash, string(name), value, msg.sender);
     }
 
     /// Add a record name to the set's list the first time it is used there.

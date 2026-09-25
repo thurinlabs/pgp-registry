@@ -56,7 +56,7 @@ contract PGPRegistryTest is Test {
 
     event Attested(address indexed owner, bytes32 indexed fingerprintHash, uint256 indexed index, bytes fingerprint, address payload, uint8 messageVersion, address submitter);
     event Revoked(address indexed owner, bytes32 indexed fingerprintHash, uint256 indexed index, string reason, uint256 replacedBy, address submitter);
-    event RecordSet(address indexed owner, uint256 indexed index, bytes32 indexed kindHash, string kind, address submitter);
+    event RecordSet(address indexed owner, uint256 indexed index, bytes32 indexed kindHash, string kind, string value, address submitter);
 
     function setUp() public {
         vm.warp(1_790_000_000); // Sep 2026
@@ -307,7 +307,7 @@ contract PGPRegistryTest is Test {
         reg.attest(FP_A, S, K);
         string memory long = "https://example.com/a/very/long/record/value/that/does/not/fit/in/one/slot";
         vm.expectEmit(true, true, true, true);
-        emit RecordSet(address(this), 0, keccak256("thurin.security"), "thurin.security", address(this));
+        emit RecordSet(address(this), 0, keccak256("thurin.security"), "thurin.security", "short", address(this));
         reg.setRecord(0, "security", "short");
         reg.setRecord(0, "com.example.link", long);
         assertEq(reg.recordText(address(this), 0, "security"), "short");
@@ -764,5 +764,17 @@ contract PGPRegistryTest is Test {
         bytes memory fake = hex"0102030405060708090a0b0c0d0e0f1011121314000000000000000000000000";
         vm.expectRevert(abi.encodeWithSelector(PGPRegistry.InvalidFingerprint.selector, fake));
         reg.attest(fake, S, K);
+    }
+
+    /// Overwrites and clears keep the old values in the events.
+    function test_recordSet_eventCarriesEveryValue() public {
+        reg.attest(FP_A, S, K);
+        string memory long = "https://example.com/a/very/long/record/value/that/does/not/fit/in/one/slot";
+        vm.expectEmit(true, true, true, true);
+        emit RecordSet(address(this), 0, keccak256("thurin.canary"), "thurin.canary", long, address(this));
+        reg.setRecord(0, "canary", long);
+        vm.expectEmit(true, true, true, true);
+        emit RecordSet(address(this), 0, keccak256("thurin.canary"), "thurin.canary", "", address(this));
+        reg.setRecord(0, "canary", "");
     }
 }
