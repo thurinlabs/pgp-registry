@@ -117,6 +117,18 @@ contract PGPRegistryInvariantTest is Test {
         targetContract(address(handler));
     }
 
+    /// A key this owner revoked as compromised is never active again.
+    function invariant_compromisedStaysDead() public view {
+        for (uint256 o; o < 3; ++o) {
+            address owner = handler.owners(o);
+            PGPRegistry.ClaimView[] memory v = reg.claimsOf(owner);
+            for (uint256 i; i < v.length; ++i) {
+                if (keccak256(bytes(v[i].revokeReason)) != keccak256("compromised")) continue;
+                assertEq(reg.keyStatus(owner, v[i].fingerprint), "compromised");
+            }
+        }
+    }
+
     /// Histories only grow; nonces only increase.
     function invariant_historyAndNoncesOnlyGrow() public view {
         assertFalse(handler.countWentDown());
@@ -143,7 +155,9 @@ contract PGPRegistryInvariantTest is Test {
                 if (keccak256(bytes(v[i].state)) == keccak256("replaced")) {
                     assertGt(v[i].replacedBy, i);
                     assertLt(v[i].replacedBy, v.length);
-                    assertEq(v[i].revokeReason, "superseded");
+                    // Replaced claims read "superseded", or "compromised" once marked later.
+                    bytes32 r = keccak256(bytes(v[i].revokeReason));
+                    assertTrue(r == keccak256("superseded") || r == keccak256("compromised"));
                 }
             }
             assertEq(active, activeSeen);

@@ -67,6 +67,7 @@ contract PGPRegistry {
     uint8 private constant NEVER = 0;
     uint8 private constant INACTIVE = 1;
     uint8 private constant ACTIVE = 2;
+    uint8 private constant COMPROMISED = 3; // revoked as compromised: this owner can't claim the key again
 
     uint8 private constant REASON_NONE = 0;
     uint8 private constant REASON_COMPROMISED = 1;
@@ -86,6 +87,9 @@ contract PGPRegistry {
     error NotAKey(bytes1 firstByte);
     error NotASignature(bytes1 firstByte);
     error DuplicateActiveFingerprint(bytes fingerprint);
+    error KeyCompromised(bytes fingerprint);
+    error KeyStillActive(bytes fingerprint);
+    error SupersededIsSetByReattest();
     error IndexOutOfBounds(uint256 index, uint256 count);
     error AlreadyRevoked(uint256 index);
     error TooManyClaims();
@@ -156,6 +160,8 @@ contract PGPRegistry {
         string value,
         address submitter
     );
+    /// @notice A reattest moved a claim's records to the claim that replaced it.
+    event RecordsMoved(address indexed owner, uint256 indexed fromIndex, uint256 indexed toIndex);
     event NonceUsed(address indexed owner, uint256 nonce);
 
     // ─── Storage ─────────────────────────────────────────────────────────────
@@ -207,10 +213,12 @@ contract PGPRegistry {
         _updateKey(msg.sender, index, key);
     }
 
-    /// @notice Revoke a claim. It stays in your history.
-    /// @param reason "", "compromised", "retired", "superseded", or "other".
+    /// @notice Revoke a claim. It stays in your history. A claim already revoked or replaced can still be
+    ///         marked "compromised" later, once: its reason changes and the key is locked.
+    /// @param reason "", "compromised", "retired", or "other" ("superseded" is set only by reattest).
+    ///        After "compromised" this address can never claim that key again.
     function revoke(uint256 index, string calldata reason) external {
-        _revoke(msg.sender, index, _reasonCode(reason), 0);
+        _ownerRevoke(msg.sender, index, reason);
     }
 
     /**
@@ -294,7 +302,7 @@ contract PGPRegistry {
             REVOKE_TYPEHASH, owner, index, keccak256(bytes(reason)), nonces[owner], deadline
         ));
         _authorize(owner, structHash, deadline, permission);
-        _revoke(owner, index, _reasonCode(reason), 0);
+        _ownerRevoke(owner, index, reason);
     }
 
     function setRecordFor(
@@ -365,6 +373,16 @@ contract PGPRegistry {
         _claimAt(owner, index);
         (, bytes32 kindHash) = _kindName(kind);
         return string(_readRecord(_recordValue[owner][_setOf(owner, index)][kindHash]));
+    }
+
+    /// @notice Where `owner` stands with a key: "none" (never claimed), "active", "revoked" (can claim
+    ///         it again), or "compromised" (revoked as compromised; can never claim it again).
+    function keyStatus(address owner, bytes calldata fingerprint) external view returns (string memory) {
+        uint8 st = _state[owner][keccak256(fingerprint)];
+        if (st == ACTIVE) return "active";
+        if (st == INACTIVE) return "revoked";
+        if (st == COMPROMISED) return "compromised";
+        return "none";
     }
 
     /// @notice Every set record on a claim, as names ("thurin.security", …) and text values.
@@ -528,6 +546,7 @@ contract PGPRegistry {
         bytes32 fpHash = keccak256(fingerprint);
         uint8 st = _state[owner][fpHash];
         if (st == ACTIVE) revert DuplicateActiveFingerprint(fingerprint);
+        if (st == COMPROMISED) revert KeyCompromised(fingerprint);
         bool v6 = fpLen == 32;
         if (st == NEVER) {
             address[] storage owners = _owners[fpHash];
@@ -571,6 +590,7 @@ contract PGPRegistry {
             // The records move: the new claim takes the set, the replaced claim gets an empty one.
             _recordSet[owner][index] = set + 1;
             _recordSet[owner][revokeIndex] = MOVED_SET + revokeIndex + 1;
+            emit RecordsMoved(owner, revokeIndex, index);
         }
     }
 
@@ -584,6 +604,24 @@ contract PGPRegistry {
         emit KeyUpdated(owner, _fingerprintHash(c), index, oldPayload, newPayload, msg.sender);
     }
 
+    /// A revoke asked for by the owner: an active claim is revoked; a revoked or replaced one can only be
+    /// marked compromised, and not while this address still has an active claim on the same key.
+    function _ownerRevoke(address owner, uint256 index, string calldata reason) internal {
+        uint8 code = _reasonCode(reason);
+        if (code == REASON_SUPERSEDED) revert SupersededIsSetByReattest();
+        Claim storage c = _claimAt(owner, index);
+        if (c.revokedAt == 0) {
+            _revoke(owner, index, code, 0);
+            return;
+        }
+        if (code != REASON_COMPROMISED || c.flags >> 4 == REASON_COMPROMISED) revert AlreadyRevoked(index);
+        bytes32 fpHash = _fingerprintHash(c);
+        if (_state[owner][fpHash] == ACTIVE) revert KeyStillActive(_fingerprintBytes(c.fingerprint, c.flags & 1 == 1));
+        c.flags = (c.flags & 0x0F) | (REASON_COMPROMISED << 4);
+        _state[owner][fpHash] = COMPROMISED;
+        emit Revoked(owner, fpHash, index, "compromised", c.replacedBy, msg.sender);
+    }
+
     function _revoke(address owner, uint256 index, uint8 reason, uint256 replacedBy) internal {
         Claim storage c = _activeClaim(owner, index);
         uint32 t = _now();
@@ -592,7 +630,7 @@ contract PGPRegistry {
         // forge-lint: disable-next-line(unsafe-typecast) replacedBy <= MAX_CLAIMS_PER_OWNER (checked by callers)
         c.replacedBy = uint16(replacedBy);
         bytes32 fpHash = _fingerprintHash(c);
-        _state[owner][fpHash] = INACTIVE;
+        _state[owner][fpHash] = reason == REASON_COMPROMISED ? COMPROMISED : INACTIVE;
         emit Revoked(owner, fpHash, index, _reasonName(reason), replacedBy, msg.sender);
     }
 
