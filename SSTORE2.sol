@@ -3,11 +3,9 @@ pragma solidity ^0.8.24;
 
 /**
  * @title SSTORE2
- * @notice Store bytes as the runtime code of a throwaway contract and read them back with
- *         EXTCODECOPY. Roughly 200 gas per byte to write (vs ~625 for SSTORE) and readable
- *         from any `eth_call`. The data is prefixed with a STOP byte so it can never execute.
- *
- *         Minimal vendored implementation (pattern from 0xSequence / solmate). No dependencies.
+ * @notice Bytes stored as the runtime code of a throwaway contract, read back with EXTCODECOPY:
+ *         about 200 gas per byte to write (SSTORE: ~625), readable from any `eth_call`. A leading
+ *         STOP byte keeps the data from ever running. Pattern from 0xSequence / solmate.
  */
 library SSTORE2 {
     error DeploymentFailed();
@@ -28,10 +26,8 @@ library SSTORE2 {
         if (pointer == address(0)) revert DeploymentFailed();
     }
 
-    /// @notice Like `write`, but at an address derived from the data (CREATE2, salt = its hash). If
-    ///         the same data is already stored, the existing pointer is returned and nothing is paid
-    ///         for the bytes. Only this contract can deploy at these addresses, so the code there is
-    ///         always exactly the data.
+    /// @notice Like `write`, at a CREATE2 address derived from the data: the same bytes again return
+    ///         the existing pointer and cost nothing. Only this contract deploys there, so the code is the data.
     function writeOnce(bytes memory data) internal returns (address pointer) {
         bytes memory creationCode = abi.encodePacked(CREATION_PREFIX, hex"00", data);
         bytes32 salt = keccak256(data);

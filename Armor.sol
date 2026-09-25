@@ -3,10 +3,9 @@ pragma solidity 0.8.37;
 
 /**
  * @title Armor
- * @notice OpenPGP ASCII armor: base64 in 64-character lines with a CRC-24 checksum line, and back.
- *         Used only by the registry's views, so people can copy keys and statements straight into
- *         gpg. Writes never depend on it. The loops are in assembly so a 16 KB key stays well inside
- *         the gas a node allows for one call.
+ * @notice OpenPGP ASCII armor (base64 in 64-character lines, a CRC-24 checksum line) and back. Only
+ *         the views use it, so keys and statements paste straight into gpg; writes never depend on it.
+ *         The loops are assembly so a 16 KB key stays well inside a node's gas limit for one call.
  */
 library Armor {
     bytes internal constant ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -159,12 +158,8 @@ library Armor {
         }
     }
 
-    /**
-     * Decode the base64 characters in t[start, limit), skipping whitespace. Header lines were already
-     * skipped when line breaks survive; in a flattened paste a header can't be told apart from data,
-     * so a ':' there is refused (UnsupportedHeader). Four characters are decoded at once whenever the
-     * next four are plain base64.
-     */
+    /// Decode the base64 in t[start, limit), skipping whitespace. In a flattened paste a header can't be
+    /// told from data, so a ':' there is refused. Four characters at a time when all four are base64.
     function _decodeTokens(bytes memory t, uint256 start, uint256 limit) private pure returns (bytes memory out) {
         out = new bytes(((limit - start) * 3) / 4 + 3);
         bytes memory table = DECODE_TABLE;

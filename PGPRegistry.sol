@@ -23,8 +23,7 @@ contract PGPRegistry {
 
     uint8 public constant VERSION = 3;
 
-    /// @notice Timestamps are stored as seconds since this moment (2026-01-01 00:00:00 UTC) so a claim
-    ///         fits in two storage slots. Views return normal Unix seconds.
+    /// @notice Stored times count from 2026-01-01 UTC so a claim fits in two slots; views return Unix seconds.
     uint256 public constant EPOCH = 1_767_225_600;
 
     uint256 public constant MAX_KEY_BYTES = 16_384;
@@ -217,20 +216,16 @@ contract PGPRegistry {
         _updateKey(msg.sender, index, key);
     }
 
-    /// @notice Revoke a claim. It stays in your history. A claim already revoked or replaced can still be
-    ///         marked "compromised" later, once: its reason changes and the key is locked.
-    /// @param reason "", "compromised", "retired", or "other" ("superseded" is set only by reattest).
-    ///        After "compromised" this address can never claim that key again.
+    /// @notice Revoke a claim; it stays in your history. A revoked or replaced claim can later be marked "compromised", once.
+    /// @param reason "", "compromised", "retired", or "other" ("superseded" comes only from reattest). After
+    ///        "compromised" this address can never claim the key again.
     function revoke(uint256 index, string calldata reason) external {
         _ownerRevoke(msg.sender, index, reason, true);
     }
 
-    /**
-     * @notice Set a record on an active claim, or clear it with an empty value (clearing works on
-     *         revoked claims too).
-     * @param kind  Lowercase name; without a dot it means "thurin.<kind>" (e.g. "security").
-     * @param value Text, up to 1,024 bytes.
-     */
+    /// @notice Set a record on an active claim; an empty value clears it, on revoked claims too.
+    /// @param kind  Lowercase name; without a dot it means "thurin.<kind>" (e.g. "security").
+    /// @param value Text, up to 1,024 bytes.
     function setRecord(uint256 index, string calldata kind, string calldata value) external {
         _setRecord(msg.sender, index, kind, value);
     }
@@ -531,8 +526,8 @@ contract PGPRegistry {
         out = new bytes[](n);
         for (uint256 i; i < n; ++i) {
             bytes32 w = list[start + i];
-            // A v4 entry is 20 bytes followed by 12 zero bytes; decided from the word itself so no
-            // one else's claim can change how this entry reads.
+            // A v4 entry is 20 bytes then 12 zero bytes. Read from the word itself, so no other claim
+            // can change how it reads.
             // forge-lint: disable-next-line(unsafe-typecast) the low 96 bits
             bool v6 = uint96(uint256(w)) != 0;
             out[i] = _fingerprintBytes(w, v6);
@@ -617,8 +612,7 @@ contract PGPRegistry {
         emit KeyUpdated(owner, _fingerprintHash(c), index, oldPayload, newPayload, msg.sender);
     }
 
-    /// A revoke asked for by the owner: an active claim is revoked; a revoked or replaced one can only be
-    /// marked compromised, and not while this address still has an active claim on the same key.
+    /// An active claim is revoked; with `allowLate`, a revoked or replaced one can be marked compromised.
     function _ownerRevoke(address owner, uint256 index, string calldata reason, bool allowLate) internal {
         uint8 code = _reasonCode(reason);
         if (code == REASON_SUPERSEDED) revert SupersededIsSetByReattest();
