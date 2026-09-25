@@ -57,6 +57,9 @@ contract PGPRegistry {
         keccak256("Revoke(address owner,uint256 index,string reason,uint256 nonce,uint256 deadline)");
     bytes32 public constant SET_RECORD_TYPEHASH =
         keccak256("SetRecord(address owner,uint256 index,string kind,string value,uint256 nonce,uint256 deadline)");
+    /// A permission to mark an already revoked or replaced claim compromised; a Revoke permission never can.
+    bytes32 public constant MARK_COMPROMISED_TYPEHASH =
+        keccak256("MarkCompromised(address owner,uint256 index,uint256 nonce,uint256 deadline)");
 
     bytes4 private constant ERC1271_MAGIC = 0x1626ba7e;
     bytes private constant CLEARSIGN_HEADER = "-----BEGIN PGP SIGNED MESSAGE-----";
@@ -89,6 +92,7 @@ contract PGPRegistry {
     error DuplicateActiveFingerprint(bytes fingerprint);
     error KeyCompromised(bytes fingerprint);
     error KeyStillActive(bytes fingerprint);
+    error ClaimActive(uint256 index);
     error SupersededIsSetByReattest();
     error IndexOutOfBounds(uint256 index, uint256 count);
     error AlreadyRevoked(uint256 index);
@@ -218,7 +222,7 @@ contract PGPRegistry {
     /// @param reason "", "compromised", "retired", or "other" ("superseded" is set only by reattest).
     ///        After "compromised" this address can never claim that key again.
     function revoke(uint256 index, string calldata reason) external {
-        _ownerRevoke(msg.sender, index, reason);
+        _ownerRevoke(msg.sender, index, reason, true);
     }
 
     /**
@@ -302,7 +306,16 @@ contract PGPRegistry {
             REVOKE_TYPEHASH, owner, index, keccak256(bytes(reason)), nonces[owner], deadline
         ));
         _authorize(owner, structHash, deadline, permission);
-        _ownerRevoke(owner, index, reason);
+        // A permission revokes an active claim only, so an unused one can't become a late "compromised" mark.
+        _ownerRevoke(owner, index, reason, false);
+    }
+
+    /// @notice Mark an already revoked or replaced claim compromised, with the owner's permission.
+    function markCompromisedFor(address owner, uint256 index, uint256 deadline, bytes calldata permission) external {
+        bytes32 structHash = keccak256(abi.encode(MARK_COMPROMISED_TYPEHASH, owner, index, nonces[owner], deadline));
+        _authorize(owner, structHash, deadline, permission);
+        if (_claimAt(owner, index).revokedAt == 0) revert ClaimActive(index);
+        _markCompromised(owner, index);
     }
 
     function setRecordFor(
@@ -606,7 +619,7 @@ contract PGPRegistry {
 
     /// A revoke asked for by the owner: an active claim is revoked; a revoked or replaced one can only be
     /// marked compromised, and not while this address still has an active claim on the same key.
-    function _ownerRevoke(address owner, uint256 index, string calldata reason) internal {
+    function _ownerRevoke(address owner, uint256 index, string calldata reason, bool allowLate) internal {
         uint8 code = _reasonCode(reason);
         if (code == REASON_SUPERSEDED) revert SupersededIsSetByReattest();
         Claim storage c = _claimAt(owner, index);
@@ -614,7 +627,14 @@ contract PGPRegistry {
             _revoke(owner, index, code, 0);
             return;
         }
-        if (code != REASON_COMPROMISED || c.flags >> 4 == REASON_COMPROMISED) revert AlreadyRevoked(index);
+        if (!allowLate || code != REASON_COMPROMISED) revert AlreadyRevoked(index);
+        _markCompromised(owner, index);
+    }
+
+    /// Mark a revoked or replaced claim compromised, once; not while the key has an active claim here.
+    function _markCompromised(address owner, uint256 index) internal {
+        Claim storage c = _claimAt(owner, index);
+        if (c.flags >> 4 == REASON_COMPROMISED) revert AlreadyRevoked(index);
         bytes32 fpHash = _fingerprintHash(c);
         if (_state[owner][fpHash] == ACTIVE) revert KeyStillActive(_fingerprintBytes(c.fingerprint, c.flags & 1 == 1));
         c.flags = (c.flags & 0x0F) | (REASON_COMPROMISED << 4);

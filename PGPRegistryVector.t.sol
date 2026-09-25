@@ -59,7 +59,12 @@ contract PGPRegistryVectorTest is Test {
         )), "revokeDigest (nonce 4)");
         reg.revokeFor(owner, 1, "compromised", DEADLINE, p);
 
-        assertEq(reg.nonces(owner), 5);
+        p = _sign(keccak256(abi.encode(
+            reg.MARK_COMPROMISED_TYPEHASH(), owner, uint256(0), uint256(5), DEADLINE
+        )), "markCompromisedDigest (nonce 5)");
+        reg.markCompromisedFor(owner, 0, DEADLINE, p);
+
+        assertEq(reg.nonces(owner), 6);
         assertEq(reg.recordText(owner, 1, "security"), "mailto:x@example.com");
     }
 }

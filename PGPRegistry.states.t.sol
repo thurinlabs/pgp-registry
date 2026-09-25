@@ -137,32 +137,49 @@ contract PGPRegistryStatesTest is Test {
         assertEq(reg.keyStatus(alice, FP_A), "compromised");
     }
 
-    /// The late mark works through a permission too.
+    function _sign(bytes32 structHash) internal view returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s_) = vm.sign(ALICE_PK, keccak256(abi.encodePacked("\x19\x01", reg.DOMAIN_SEPARATOR(), structHash)));
+        return abi.encodePacked(r, s_, v);
+    }
+
+    /// The late mark through a permission has its own signed message.
     function test_markCompromisedWithPermission() public {
         vm.startPrank(alice);
         reg.attest(FP_A, S, K);
         reg.revoke(0, "");
         vm.stopPrank();
         uint256 deadline = block.timestamp + 1;
-        bytes32 sh = keccak256(abi.encode(reg.REVOKE_TYPEHASH(), alice, uint256(0), keccak256("compromised"), reg.nonces(alice), deadline));
-        (uint8 v, bytes32 r, bytes32 s_) = vm.sign(ALICE_PK, keccak256(abi.encodePacked("\x19\x01", reg.DOMAIN_SEPARATOR(), sh)));
-        reg.revokeFor(alice, 0, "compromised", deadline, abi.encodePacked(r, s_, v));
+        bytes memory p = _sign(keccak256(abi.encode(reg.MARK_COMPROMISED_TYPEHASH(), alice, uint256(0), reg.nonces(alice), deadline)));
+        reg.markCompromisedFor(alice, 0, deadline, p);
         assertEq(reg.keyStatus(alice, FP_A), "compromised");
+        assertEq(reg.claimsOf(alice)[0].revokeReason, "compromised");
     }
 
-    /// A reattest that keeps records says so in an event; one that doesn't, doesn't.
-    function test_recordsMovedEvent() public {
-        vm.startPrank(alice);
+    /// An active claim is revoked through a Revoke permission, not a MarkCompromised one.
+    function test_markCompromisedForRefusesActiveClaim() public {
+        vm.prank(alice);
         reg.attest(FP_A, S, K);
-        reg.setRecord(0, "security", "x");
-        vm.expectEmit(true, true, true, true);
-        emit RecordsMoved(alice, 0, 1);
-        reg.reattest(0, FP_B, S, K, true);
-        vm.recordLogs();
-        reg.reattest(1, FP_A, S, K, false);
+        uint256 deadline = block.timestamp + 1;
+        bytes memory p = _sign(keccak256(abi.encode(reg.MARK_COMPROMISED_TYPEHASH(), alice, uint256(0), reg.nonces(alice), deadline)));
+        vm.expectRevert(abi.encodeWithSelector(PGPRegistry.ClaimActive.selector, 0));
+        reg.markCompromisedFor(alice, 0, deadline, p);
+    }
+
+    /// An unused "revoke as compromised" permission can't lock the key later, once its claim is revoked.
+    function test_staleRevokePermissionCantMarkLater() public {
+        vm.prank(alice);
+        reg.attest(FP_A, S, K);
+        uint256 deadline = block.timestamp + 365 days;
+        bytes memory stale = _sign(keccak256(abi.encode(reg.REVOKE_TYPEHASH(), alice, uint256(0), keccak256("compromised"), reg.nonces(alice), deadline)));
+        vm.startPrank(alice);
+        reg.reattest(0, FP_A, S, K, true);       // she changes her mind: same key, new claim #1
+        reg.revoke(1, "retired");               // later, the key is set aside, still claimable
         vm.stopPrank();
-        bytes32 moved = keccak256("RecordsMoved(address,uint256,uint256)");
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        for (uint256 i; i < logs.length; ++i) assertTrue(logs[i].topics[0] != moved);
+        vm.warp(block.timestamp + 90 days);
+        vm.expectRevert(abi.encodeWithSelector(PGPRegistry.AlreadyRevoked.selector, 0));
+        reg.revokeFor(alice, 0, "compromised", deadline, stale);
+        assertEq(reg.keyStatus(alice, FP_A), "revoked");
+        vm.prank(alice);
+        reg.attest(FP_A, S, K);                  // still hers to claim
     }
 }
