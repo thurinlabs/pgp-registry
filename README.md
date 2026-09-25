@@ -1,125 +1,64 @@
 # PGPRegistry
 
-On-chain PGP-to-Ethereum identity claims. This contract is the registry behind the attestation flow at [thurin.id/attest](https://thurin.id/attest). Each attestation binds an Ethereum address to a PGP key fingerprint, and the two vouch for each other: the claim is published from (or authorized by) the address it names, and the signed payload proving key ownership is stored with it — readably, so any RPC can serve it with a plain `eth_call`.
+The contract behind [Thurin.id](https://thurin.id). A claim puts a PGP key on an Ethereum address: the key, and the key's signature over `I control the Ethereum address: 0x…`. Anyone can publish one, only the address can change it, and nobody can take it down. No owner, no admin, no fees, no upgrades.
 
-A [Thurin Labs](https://thurinlabs.id) project.
+The contract is the tool: everything works from Etherscan or `cast` with gpg. `armoredKey` gives a key ready for `gpg --import`, `clearsigned` a statement ready for `gpg --verify`, and `armorToBytes` turns pasted armor into the bytes a write form wants.
 
-## v2
+Full reference: [docs.thurin.id/#/contracts](https://docs.thurin.id/#/contracts).
 
-Version 2 is a fresh deployment (2026-09). Same trust model as v1 — permissionless, immutable, no admin, no fees, no on-chain PGP parsing — with a new shape:
+## Address
 
-| | v1 | v2 |
-|---|---|---|
-| Payload | only in the `Attested` event (log scans) | SSTORE2 data contracts, read with `getPayload` |
-| Replace a claim | `revoke` + `attest` | `reattest` (one transaction) |
-| Add proofs to a key | new attestation + new signature | `updateKey` (same fingerprint, no re-sign) |
-| Who can write | `msg.sender` only | owner directly, **or** anyone with the owner's EIP-712 authorization |
-| Lookups | log scans | `addressesFor(fingerprintHash)`, `fingerprintsForKeyId(keyId)`, `current`, `attestationsOf` |
-| Fingerprint | 40-char hex string | raw `bytes` — 20 (v4) or 32 (v6) |
-| Extension point | — | bounded typed records per attestation |
-| Version check | — | `VERSION()` returns 2 |
+`0xFa6956c11163517249f8A67F5560a4406B519451`, the same on Ethereum mainnet and Sepolia: deployed through the canonical CREATE2 deployer (`0x4e59…956C`) with salt `keccak256("thurin.pgp-registry.v3")`. The address depends only on the code and the settings in `foundry.toml`.
 
-Design record: the `ADR-registry-v2` note in the Thurin Labs vault.
-
-### Deployments
-
-| Network | Address | Deploy block |
-|---|---|---|
-| Sepolia | [`0x9302E02e2869e129aC8516fE5eFFd51EA3082c09`](https://sepolia.etherscan.io/address/0x9302E02e2869e129aC8516fE5eFFd51EA3082c09) | 11683667 |
-| Ethereum mainnet | [`0x9302E02e2869e129aC8516fE5eFFd51EA3082c09`](https://etherscan.io/address/0x9302E02e2869e129aC8516fE5eFFd51EA3082c09) | 25962908 |
-
-The address is the same on every chain: the deploy script uses CREATE2 via the canonical deployer with salt `keccak256("thurin.pgp-registry.v2")`. Predicted from the current source: `0x9302E02e2869e129aC8516fE5eFFd51EA3082c09` (bytecode must be built from the same commit and settings).
-
-v1 (legacy, still on-chain, no longer read by Thurin): mainnet [`0xf7a45BC662A78a6fb417ED5f52b3766cbf13EbBb`](https://etherscan.io/address/0xf7a45BC662A78a6fb417ED5f52b3766cbf13EbBb), source in `legacy/`.
-
-## Interface
+## In short
 
 ```solidity
-// direct — msg.sender is the owner and pays gas
-function attest(bytes fingerprint, bytes pgpSignature, bytes pgpPublicKey) returns (uint256 index);
-function reattest(uint256 revokeIndex, bytes fingerprint, bytes pgpSignature, bytes pgpPublicKey) returns (uint256 index);
-function updateKey(uint256 index, bytes pgpPublicKey);
-function revoke(uint256 index);
-function setRecord(uint256 index, bytes32 kind, bytes value);   // empty value clears (allowed on revoked entries too)
-function cancelAuthorization();                                  // burn the caller's current nonce
-
-// authorized — same actions, owner signs EIP-712, anyone submits and pays gas
-function attestFor(address owner, bytes fingerprint, bytes pgpSignature, bytes pgpPublicKey, uint256 deadline, bytes signature) returns (uint256);
-function reattestFor(address owner, uint256 revokeIndex, bytes fingerprint, bytes pgpSignature, bytes pgpPublicKey, uint256 deadline, bytes signature) returns (uint256);
-function updateKeyFor(address owner, uint256 index, bytes pgpPublicKey, uint256 deadline, bytes signature);
-function revokeFor(address owner, uint256 index, uint256 deadline, bytes signature);
-function setRecordFor(address owner, uint256 index, bytes32 kind, bytes value, uint256 deadline, bytes signature);
-function nonces(address owner) view returns (uint256);
-function DOMAIN_SEPARATOR() view returns (bytes32);
-
-// views
-function attestationCount(address owner) view returns (uint256);
-function getAttestation(address owner, uint256 index) view returns (Attestation);
-function getPayload(address owner, uint256 index) view returns (bytes pgpSignature, bytes pgpPublicKey);
-function attestationsOf(address owner) view returns (Attestation[]);
-function current(address owner) view returns (bool found, uint256 index, Attestation);
-function record(address owner, uint256 index, bytes32 kind) view returns (bytes);
-function addressesFor(bytes32 fingerprintHash) view returns (address[]);      // keccak256(raw fingerprint)
-function fingerprintsForKeyId(bytes8 keyId) view returns (bytes[]);          // long key ID: v4 = last 8 bytes, v6 = first 8 (RFC 9580)
-// paginated forms for large sets: attestationsOfRange, addressesForCount/Range, fingerprintsForKeyIdCount/Range
+attest(bytes fingerprint, bytes signature, bytes key) → uint256 index
+reattest(uint256 revokeIndex, bytes fingerprint, bytes signature, bytes key, bool keepRecords) → uint256 index
+updateKey(uint256 index, bytes key)
+revoke(uint256 index, string reason)                  // "", "compromised", "retired", "other"
+setRecord(uint256 index, string kind, string value)   // "" clears
 ```
 
-`Attestation { bytes fingerprint; uint64 createdAt; uint64 revokedAt; uint8 messageVersion; address keyPtr; address sigPtr; }` — `revokedAt == 0` means active. Limits: key ≤ 8192 bytes, signature ≤ 4096, record ≤ 1024, fingerprint 20 or 32 bytes. One active attestation per (owner, fingerprint); use `reattest` to replace.
+Each has a `…For` twin that anyone can send with the owner's EIP-712 permission, so the owner never needs ETH, plus `markCompromisedFor` for marking a revoked claim compromised later. Reads include `claimsOf`, `current`, `summary`, `keyStatus`, `recordsOf`, `ownersOf`, and `fingerprintsForKeyId`.
 
-The clearsigned message (`messageVersion` 1) is exactly:
+- Keys and signatures are stored as raw bytes (SSTORE2), one blob per claim: key ≤ 16 KB, signature ≤ 8 KB, 24,000 bytes together.
+- A claim is 2 storage slots. Records are named text, ≤ 1 KB.
+- "compromised" is final per address: it can never claim that key again.
+- The contract checks formats, not PGP signatures. Readers verify (gpg, [identity-kit](https://github.com/thurinlabs/identity-kit)).
 
-```
-I control the Ethereum address: 0x<lowercase address>
-```
-
-### Authorized writes
-
-The `…For` functions are a second door, not a replacement. The owner signs an EIP-712 struct (domain `Thurin PGPRegistry` / `2` / chain id / this contract) that binds every parameter, the owner's current nonce, and a deadline. Whoever submits it pays the gas and is recorded as `submitter` in the event; they cannot alter, reuse, or delay it past the deadline. Contract wallets are checked through EIP-1271. Thurin does not run a relayer; the app uses the direct functions.
-
-```
-Attest(address owner,bytes fingerprint,bytes pgpSignature,bytes pgpPublicKey,uint256 nonce,uint256 deadline)
-Reattest(address owner,uint256 revokeIndex,bytes fingerprint,bytes pgpSignature,bytes pgpPublicKey,uint256 nonce,uint256 deadline)
-UpdateKey(address owner,uint256 index,bytes pgpPublicKey,uint256 nonce,uint256 deadline)
-Revoke(address owner,uint256 index,uint256 nonce,uint256 deadline)
-SetRecord(address owner,uint256 index,bytes32 kind,bytes value,uint256 nonce,uint256 deadline)
-```
-
-`script/Authorize.s.sol` produces a signature from a keystore or hardware wallet without broadcasting; hand it to `cast send … "attestFor(...)"` from any funded account.
-
-### Gas (Foundry, fixture key of 656 bytes)
-
-| Action | Gas |
-|---|---|
-| `attest` | ~560k |
-| `reattest` | ~399k |
-| `updateKey` | ~172k |
-| `revoke` | ~5k |
-
-Roughly 200 gas per payload byte on top of fixed costs, which is why the app strips email user IDs before publishing.
+Gas for gpg's default Ed25519 key: attest 430k, updateKey 295k, reattest 640k, revoke 43k, a short record 81k.
 
 ## Layout
 
 ```
-PGPRegistry.sol       # the v2 contract
-SSTORE2.sol           # minimal vendored SSTORE2 (write = CREATE, read = EXTCODECOPY)
-PGPRegistry.t.sol     # v2 test suite (62 tests + invariants + gas probe + EIP-712 vectors)
-legacy/               # v1 contract + its 28 tests, kept for reference
-script/               # Deploy (CREATE2) / Attest / Revoke / Authorize + fixtures
-broadcast/            # deployment records
+PGPRegistry.sol              the contract
+Armor.sol                    ASCII armor and clearsign, for the text views
+SSTORE2.sol                  write-once storage in contract code
+PGPRegistry*.t.sol           tests: units, claim states, EIP-712 vectors, invariants
+script/Deploy.s.sol          CREATE2 deploy
+fixtures/                    real gpg output the tests read
+legacy/                      earlier versions, for reference
 ```
 
-## Development
+## Build
 
-Requires [Foundry](https://getfoundry.sh). Compiled with solc 0.8.24, via-IR, optimizer 200 runs, `bytecode_hash = none` / `cbor_metadata = false` so the CREATE2 address depends only on the code and settings, not on comments or file paths.
+[Foundry](https://getfoundry.sh). solc 0.8.37, via-IR, optimizer 200, EVM cancun, no metadata hash.
 
 ```bash
-git clone --recurse-submodules https://github.com/thurinlabs/pgp-registry
+git clone --recurse-submodules https://github.com/thurinlabs/pgp-registry && cd pgp-registry
 forge build
 forge test
-forge snapshot
 ```
 
-Deploy (dry run first, then with `--broadcast --verify`):
+The address this code deploys to, which should be the one above:
+
+```bash
+cast create2 --deployer 0x4e59b44847b379578588920cA78FbF26c0B4956C --salt $(cast keccak thurin.pgp-registry.v3) \
+  --init-code-hash $(cast keccak $(forge inspect PGPRegistry bytecode))
+```
+
+Deploy (dry run first, then add `--broadcast --verify`):
 
 ```bash
 forge script script/Deploy.s.sol --rpc-url sepolia --account <keystore>
@@ -127,11 +66,4 @@ forge script script/Deploy.s.sol --rpc-url sepolia --account <keystore>
 
 ## License
 
-MIT
-
-## Links
-
-- [Attest](https://thurin.id/attest) — create identity claims
-- [Thurin](https://thurin.id) — look up and verify identities
-- [Contract docs](https://docs.thurin.id/#/contracts)
-- [GitHub](https://github.com/thurinlabs)
+MIT. A [Thurin Labs](https://thurinlabs.id) project.

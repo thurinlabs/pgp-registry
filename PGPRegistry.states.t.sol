@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.37;
 
-import {Test, Vm} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {PGPRegistry} from "./PGPRegistry.sol";
 
 /// @dev Claim states after revoking: "compromised" is final, marking it later, records moving on reattest.

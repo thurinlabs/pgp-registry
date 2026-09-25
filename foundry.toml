@@ -13,7 +13,7 @@ cbor_metadata = false
 fs_permissions = [{ access = "read", path = "script/" }, { access = "read", path = "fixtures/" }]
 
 [lint]
-ignore = ["lib/**/*.sol"]
+ignore = ["lib/**/*.sol", "*.t.sol"]   # tests cast literals and read fixtures on purpose
 
 [rpc_endpoints]
 sepolia = "${SEPOLIA_RPC_URL}"
