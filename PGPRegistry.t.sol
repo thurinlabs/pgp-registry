@@ -608,7 +608,7 @@ contract PGPRegistryTest is Test {
         return string(out);
     }
 
-    // ─── Review regressions ──────────────────────────────────────────────────
+    // ─── Edge cases ──────────────────────────────────────────────────────────
 
     function test_base64_ignoresBytesPastTheEnd() public view {
         assertEq(string(armorLib.base64Dirty(hex"41")), "QQ==");
